@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """
-ai-signal: research pipeline for under-covered AI breakthroughs.
+Trueground research pipeline.
 
-Runs three research agents in parallel, synthesizes findings, writes output/index.html.
+Runs four agents in parallel (reasoning/inference, architecture/training,
+agents/science, practitioner discoveries), synthesizes findings, writes
+docs/index.html, and deploys to the gh-pages branch.
 
 Usage:
     python run.py
-    python run.py --model claude-opus-4-6   # use opus for higher quality
-    python run.py --no-open                  # don't auto-open browser
+    python run.py --model claude-opus-4-6   # higher quality
+    python run.py --no-open                  # skip browser open
+    python run.py --no-deploy               # skip git push to gh-pages
 """
 
 import asyncio
@@ -694,7 +697,7 @@ def render_practitioner_section(discoveries: list[dict]) -> str:
     </section>"""
 
 
-async def main(model: str, open_browser: bool) -> None:
+async def main(model: str, open_browser: bool, args=None) -> None:
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         print("Error: ANTHROPIC_API_KEY not set.")
@@ -746,7 +749,43 @@ async def main(model: str, open_browser: bool) -> None:
     if open_browser:
         subprocess.run(["open", str(output_path)], check=False)
 
+    if not args.no_deploy:
+        deploy(html, date_str=datetime.now().strftime("%Y-%m-%d"))
+
     print("Done.")
+
+
+def deploy(html: str, date_str: str) -> None:
+    """Push generated HTML to gh-pages branch."""
+    repo_root = ROOT
+    print("Deploying to gh-pages...")
+    try:
+        # Stash any working changes on main so we can switch branches cleanly
+        subprocess.run(["git", "stash"], cwd=repo_root, check=False, capture_output=True)
+        subprocess.run(["git", "checkout", "gh-pages"], cwd=repo_root, check=True, capture_output=True)
+
+        index = repo_root / "index.html"
+        index.write_text(html, encoding="utf-8")
+
+        subprocess.run(["git", "add", "index.html"], cwd=repo_root, check=True)
+        result = subprocess.run(
+            ["git", "diff", "--cached", "--quiet"],
+            cwd=repo_root, capture_output=True
+        )
+        if result.returncode != 0:  # there are staged changes
+            subprocess.run(
+                ["git", "commit", "-m", f"Deploy: {date_str}"],
+                cwd=repo_root, check=True, capture_output=True
+            )
+            subprocess.run(["git", "push", "origin", "gh-pages"], cwd=repo_root, check=True)
+            print(f"  deployed: https://trueground.github.io/")
+        else:
+            print("  no changes to deploy")
+    except subprocess.CalledProcessError as e:
+        print(f"  deploy failed: {e}")
+    finally:
+        subprocess.run(["git", "checkout", "main"], cwd=repo_root, check=False, capture_output=True)
+        subprocess.run(["git", "stash", "pop"], cwd=repo_root, check=False, capture_output=True)
 
 
 if __name__ == "__main__":
@@ -761,6 +800,11 @@ if __name__ == "__main__":
         action="store_true",
         help="Don't auto-open the HTML output in a browser",
     )
+    parser.add_argument(
+        "--no-deploy",
+        action="store_true",
+        help="Skip pushing to gh-pages branch",
+    )
     args = parser.parse_args()
 
-    asyncio.run(main(model=args.model, open_browser=not args.no_open))
+    asyncio.run(main(model=args.model, open_browser=not args.no_open, args=args))
